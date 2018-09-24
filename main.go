@@ -14,6 +14,33 @@ import (
 	"github.com/hailocab/go-hostpool"
 )
 
+type DistributionValue struct {
+	Dist *Distribution
+	IsSet bool
+}
+
+func MakeDistributionValue (dist *Distribution) *DistributionValue {
+	return &DistributionValue{dist, false}
+}
+
+func (v DistributionValue) String() string {
+	if !v.IsSet {
+		return ""
+	}
+	return (*v.Dist).Name();
+}
+
+func (v *DistributionValue) Set(s string) error {
+	dist, err := MakeDistribution(s)
+	if err == nil {
+		*v.Dist = dist
+		v.IsSet = true
+		return nil
+	} else {
+		return err
+	}
+}
+
 var (
 	keyspaceName     string
 	tableName        string
@@ -25,9 +52,9 @@ var (
 
 	testDuration time.Duration
 
-	partitionCount     int64
-	clusteringRowCount int64
-	clusteringRowSize  int64
+	partitionCount         int64
+	clusteringRowCount     int64
+	clusteringRowSizeDist  Distribution
 
 	rowsPerRequest    int
 	provideUpperBound bool
@@ -194,7 +221,7 @@ func main() {
 
 	flag.Int64Var(&partitionCount, "partition-count", 10000, "number of partitions")
 	flag.Int64Var(&clusteringRowCount, "clustering-row-count", 100, "number of clustering rows in a partition")
-	flag.Int64Var(&clusteringRowSize, "clustering-row-size", 4, "size of a single clustering row")
+	flag.Var(MakeDistributionValue(&clusteringRowSizeDist), "clustering-row-size", "size of a single clustering row")
 
 	flag.IntVar(&rowsPerRequest, "rows-per-request", 1, "clustering rows per single request")
 	flag.BoolVar(&provideUpperBound, "provide-upper-bound", false, "whether read requests should provide an upper bound")
@@ -226,6 +253,8 @@ func main() {
 		fmt.Fprintf(os.Stdout, "Usage:\n%s [options]\n\n", os.Args[0])
 		flag.PrintDefaults()
 	}
+
+	fmt.Println("Clustering row size:\t", clusteringRowSizeDist.Name())
 
 	if mode == "" {
 		log.Fatal("test mode needs to be specified")
@@ -355,7 +384,7 @@ func main() {
 		fmt.Println("Partition offset:\t", partitionOffset)
 	}
 	fmt.Println("Clustering rows:\t", clusteringRowCount)
-	fmt.Println("Clustering row size:\t", clusteringRowSize)
+	fmt.Println("Clustering row size:\t", clusteringRowSizeDist.Name())
 	fmt.Println("Rows per request:\t", rowsPerRequest)
 	if mode == "read" {
 		fmt.Println("Provide upper bound:\t", provideUpperBound)

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
+	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -287,6 +290,93 @@ func RunTest(resultChannel chan Result, workload WorkloadGenerator, rateLimiter 
 	resultChannel <- *rb.FullResult
 }
 
+type Distribution interface {
+	Name() string
+	GenerateValue() int64
+}
+
+type FixedDistribution struct {
+	Value int64
+}
+
+func (fd FixedDistribution) Name() string {
+	return fmt.Sprintf("Fixed(%d)", fd.Value)
+}
+
+func (fd FixedDistribution) GenerateValue() int64 {
+	return fd.Value
+}
+
+type NormalDistribution struct {
+	Mean int64
+	Variance int64
+}
+
+func (nd NormalDistribution) Name() string {
+	return fmt.Sprintf("Normal(%d, %d)", nd.Mean, nd.Variance)
+}
+
+func (nd NormalDistribution) GenerateValue() int64 {
+	raw := int64(rand.NormFloat64() * float64(nd.Variance) + float64(nd.Mean))
+	if raw < 1 {
+		return 1
+	} else {
+		return raw
+	}
+}
+
+func ParseDistributionParams (params []string, numParams int, name string) ([]int64, error) {
+	if len(params) != numParams {
+		return nil, errors.New(fmt.Sprintf("Invalid number of parameters for %s distribution, have (%d), want (%d)", name, len(params), numParams))
+	}
+
+	parsedParams := make([]int64, numParams)
+	for i := 0; i < len(params); i++ {
+		param := params[i]
+		val, err := strconv.ParseInt(param, 10, 64)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Failed to parse parameter %d for %s distribution: %s", i, name, err))
+		}
+		parsedParams[i] = val
+	}
+	return parsedParams, nil
+}
+
+func MakeDistribution (config string) (Distribution, error) {
+	i, err := strconv.ParseInt(config, 10, 64)
+	if err == nil {
+		return &FixedDistribution{i}, nil
+	}
+
+	re := regexp.MustCompile("([A-Z][a-z]+)(:(([0-9]+,)*[0-9]+))?")
+	match := re.FindStringSubmatch(config)
+
+	if match == nil {
+		return nil, errors.New(fmt.Sprintf("Invalid configuration string `%s` for creating a distribution", config))
+	}
+
+	params := strings.Split(match[3], ",")
+	distName := match[1]
+
+	if distName == "Fixed" {
+		parsedParams, err := ParseDistributionParams(params, 1, distName)
+		if err != nil {
+			return nil, err
+		} else {
+			return &FixedDistribution{parsedParams[0]}, nil
+		}
+	} else if distName == "Normal" {
+		parsedParams, err := ParseDistributionParams(params, 2, distName)
+		if err != nil {
+			return nil, err
+		} else {
+			return &NormalDistribution{parsedParams[0], parsedParams[1]}, nil
+		}
+	} else {
+		return nil, errors.New(fmt.Sprintf("Unknown distribution: %s", distName))
+	}
+}
+
 func generateData(pk int64, ck int64, size int64) []byte {
 	value := make([]byte, size)
 	if validateData {
@@ -312,7 +402,7 @@ func DoWrites(session *gocql.Session, resultChannel chan Result, workload Worklo
 	RunTest(resultChannel, workload, rateLimiter, func(rb *ResultBuilder) (error, time.Duration) {
 		pk := workload.NextPartitionKey()
 		ck := workload.NextClusteringKey()
-		value := generateData(pk, ck, clusteringRowSize)
+		value := generateData(pk, ck, clusteringRowSizeDist.GenerateValue())
 		bound := query.Bind(pk, ck, value)
 
 		requestStart := time.Now()
@@ -341,7 +431,7 @@ func DoBatchedWrites(session *gocql.Session, resultChannel chan Result, workload
 		for !workload.IsPartitionDone() && atomic.LoadUint32(&stopAll) == 0 && batchSize < rowsPerRequest {
 			ck := workload.NextClusteringKey()
 			batchSize++
-			value := generateData(currentPk, ck, clusteringRowSize)
+			value := generateData(currentPk, ck, clusteringRowSizeDist.GenerateValue())
 			batch.Query(request, currentPk, ck, value)
 		}
 
@@ -443,7 +533,7 @@ func DoReadsFromTable(table string, session *gocql.Session, resultChannel chan R
 			for iter.Scan(&resPk, &resCk, &value) {
 				rb.IncRows()
 				if validateData {
-					valueExpected := generateData(resPk, resCk, clusteringRowSize)
+					valueExpected := generateData(resPk, resCk, clusteringRowSizeDist.GenerateValue())
 					if bytes.Compare(value, valueExpected) != 0 {
 						rb.IncErrors()
 						log.Print("data corruption:", resPk, resCk, value, valueExpected)
