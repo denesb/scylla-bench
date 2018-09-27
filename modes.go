@@ -291,7 +291,7 @@ func RunTest(resultChannel chan Result, workload WorkloadGenerator, rateLimiter 
 }
 
 type Distribution interface {
-	Name() string
+	String() string
 	GenerateValue() int64
 }
 
@@ -299,7 +299,7 @@ type FixedDistribution struct {
 	Value int64
 }
 
-func (fd FixedDistribution) Name() string {
+func (fd FixedDistribution) String() string {
 	return fmt.Sprintf("Fixed(%d)", fd.Value)
 }
 
@@ -312,7 +312,7 @@ type NormalDistribution struct {
 	Variance int64
 }
 
-func (nd NormalDistribution) Name() string {
+func (nd NormalDistribution) String() string {
 	return fmt.Sprintf("Normal(%d, %d)", nd.Mean, nd.Variance)
 }
 
